@@ -127,3 +127,10 @@ For the clangd check in the minimal example, add a local `.clangd` with
 `CompileFlags.Add` entries for `-std=c++17` and the include flags printed by
 `python3 -m pybind11 --includes`. Reload the development host and check the
 output channel after opening `demo.py`.
+
+
+## Credit
+
+Special thanks to:
+
+- https://linux.do/
