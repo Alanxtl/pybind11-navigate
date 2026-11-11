@@ -1,0 +1,57 @@
+{
+  "name": "pybind11-navigate",
+  "displayName": "pybind11 Navigate",
+  "description": "Go from Python symbols to pybind11 registrations in the workspace.",
+  "publisher": "local-dev",
+  "version": "0.1.0",
+  "private": true,
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Programming Languages"],
+  "main": "./src/extension.js",
+  "activationEvents": ["onLanguage:python"],
+  "capabilities": {
+    "untrustedWorkspaces": { "supported": false },
+    "virtualWorkspaces": false
+  },
+  "scripts": {
+    "test": "node test/navigation.test.js"
+  },
+  "contributes": {
+    "configuration": {
+      "title": "pybind11 Navigate",
+      "properties": {
+        "pybind11Navigation.include": {
+          "type": "string",
+          "default": "**/*.{cc,cpp,cxx,h,hh,hpp,hxx,cu,cuh}",
+          "scope": "resource",
+          "description": "Glob for C++ binding sources, relative to each workspace folder."
+        },
+        "pybind11Navigation.exclude": {
+          "type": "string",
+          "default": "{**/.git/**,**/.venv/**,**/build*/**,**/node_modules/**}",
+          "scope": "resource",
+          "description": "Glob for paths to skip while indexing."
+        },
+        "pybind11Navigation.moduleMap": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": { "type": "string" },
+          "scope": "resource",
+          "description": "Map full Python import paths to names used in PYBIND11_MODULE."
+        },
+        "pybind11Navigation.useClangd": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "description": "Use the installed clangd extension's AST when available and fall back to source indexing otherwise."
+        },
+        "pybind11Navigation.pythonPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Python 3 executable for parsing source. Leave empty to use python3 (python on Windows)."
+        }
+      }
+    }
+  }
+}

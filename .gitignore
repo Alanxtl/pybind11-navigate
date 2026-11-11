@@ -1,0 +1,6 @@
+!.vscode/
+.vscode/*
+!.vscode/launch.json
+__pycache__/
+*.so
+*.pyd
