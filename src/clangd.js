@@ -43,7 +43,8 @@ function indexModuleAst(document, ast, { module, receiver, start }) {
         const { start, end } = value.range;
         if (start.line !== end.line) return undefined;
         const text = document.lineAt(start.line).text.slice(start.character, end.character);
-        return decodeExportName(text);
+        const name = decodeExportName(text);
+        return name ? { name, position: { line: start.line, character: start.character + 1 } } : undefined;
     }
 
     function add(position, name, kind, className) {
@@ -65,7 +66,7 @@ function indexModuleAst(document, ast, { module, receiver, start }) {
             if (method === "def" || method === "def_static") {
                 const end = first.range?.end;
                 const position = end && { line: end.line, character: end.character - method.length };
-                add(position, literal(second), base.className ? "method" : "function", base.className);
+                add(position, literal(second)?.name, base.className ? "method" : "function", base.className);
             }
             return base;
         }
@@ -76,12 +77,10 @@ function indexModuleAst(document, ast, { module, receiver, start }) {
             if (handle?.kind === "CXXConstruct" && handle.detail === "handle") {
                 handle = unwrap(expressions(handle)[0]);
             }
-            const className = literal(second);
-            if (!isModule(handle) || !className) return undefined;
-            const type = node.children.find((child) => child.role === "type");
-            const template = type?.children?.find((child) => child.kind === "TemplateSpecialization");
-            add(template?.range?.start ?? node.range?.start, className, "class");
-            return { className };
+            const exported = literal(second);
+            if (!isModule(handle) || !exported) return undefined;
+            add(exported.position, exported.name, "class");
+            return { className: exported.name };
         }
         return undefined;
     }

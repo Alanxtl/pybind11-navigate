@@ -2,10 +2,11 @@ const { spawn } = require("node:child_process");
 const path = require("node:path");
 
 const helper = path.join(__dirname, "python_symbols.py");
+const reexports = path.join(__dirname, "python_reexports.py");
 
-function pythonQuery(executable, source, line, byteColumn, signal) {
+function parsePython(executable, script, args, signal) {
     return new Promise((resolve, reject) => {
-        const child = spawn(executable, ["-I", "-X", "utf8", helper], {
+        const child = spawn(executable, ["-I", "-X", "utf8", script], {
             signal,
             timeout: 5000,
             stdio: ["pipe", "pipe", "pipe"],
@@ -29,8 +30,16 @@ function pythonQuery(executable, source, line, byteColumn, signal) {
         });
         // A canceled or failed process can close stdin before reading the source.
         child.stdin.on("error", reject);
-        child.stdin.end(JSON.stringify([source, line, byteColumn]));
+        child.stdin.end(JSON.stringify(args));
     });
+}
+
+function pythonQuery(executable, source, line, byteColumn, signal) {
+    return parsePython(executable, helper, [source, line, byteColumn], signal);
+}
+
+function pythonReexport(executable, source, module, isPackage, name, signal) {
+    return parsePython(executable, reexports, [source, module, isPackage, name], signal);
 }
 
 function bindingKey(module, className, name, kind) {
@@ -51,29 +60,58 @@ function groupBindings(files) {
     return index;
 }
 
-function findBindings(symbol, moduleMap, index) {
+function bindingRequests(symbol, moduleMap) {
     if (!symbol) return [];
     const parts = symbol.path;
-    const pythonModule = (size) => parts.slice(0, size).join(".");
-    const mapped = (size) => Object.hasOwn(moduleMap, pythonModule(size));
-    const nativeModule = (size) => mapped(size) ? moduleMap[pythonModule(size)] : parts[size - 1];
-    if (symbol.instance) {
-        if (!symbol.member || parts.length <= symbol.moduleParts) return [];
-        const key = bindingKey(nativeModule(parts.length - 1), parts.at(-1), symbol.member, "method");
-        return index.get(key) ?? [];
-    }
-    const sizes = [parts.length - 1, parts.length - 2].filter((size) => size >= symbol.moduleParts);
+    if (symbol.instance && !symbol.member) return [];
+    const sizes = symbol.instance ? [parts.length - 1] : [parts.length - 1, parts.length - 2];
+    const requests = sizes.filter((size) => size >= symbol.moduleParts).map((size) => ({
+        module: parts.slice(0, size).join("."),
+        name: parts[size],
+        member: symbol.instance ? symbol.member : parts[size + 1],
+    }));
     // Prefer an explicit mapping, then an indexed class member, then a
     // module-level export. An import path cannot cross a known module boundary.
-    const explicit = sizes.find(mapped);
-    for (const size of explicit === undefined ? sizes.reverse() : [explicit]) {
-        const module = nativeModule(size);
-        const [first, second] = parts.slice(size);
-        const classes = index.get(bindingKey(module, undefined, first, "class")) ?? [];
-        if (!second) return [...classes, ...(index.get(bindingKey(module, undefined, first, "function")) ?? [])];
-        if (classes.length) return index.get(bindingKey(module, first, second, "method")) ?? [];
+    const explicit = requests.find(({ module }) => Object.hasOwn(moduleMap, module));
+    return explicit ? [explicit] : requests.reverse();
+}
+
+function lookupBindings(request, moduleMap, index) {
+    const { module, name, member } = request;
+    const native = Object.hasOwn(moduleMap, module) ? moduleMap[module] : module.split(".").at(-1);
+    const classes = index.get(bindingKey(native, undefined, name, "class")) ?? [];
+    if (member) {
+        if (classes.length) return index.get(bindingKey(native, name, member, "method")) ?? [];
+    } else {
+        return [...classes, ...(index.get(bindingKey(native, undefined, name, "function")) ?? [])];
+    }
+    return undefined;
+}
+
+function findBindings(symbol, moduleMap, index) {
+    for (const request of bindingRequests(symbol, moduleMap)) {
+        const hits = lookupBindings(request, moduleMap, index);
+        if (hits) return hits;
     }
     return [];
 }
 
-module.exports = { bindingKey, findBindings, groupBindings, pythonQuery };
+async function findReexportBindings(symbol, moduleMap, index, resolve) {
+    for (const request of bindingRequests(symbol, moduleMap)) {
+        const visited = new Set();
+        let target = request;
+        while (target && !Object.hasOwn(moduleMap, target.module)) {
+            const key = JSON.stringify([target.module, target.name]);
+            if (visited.has(key)) break;
+            visited.add(key);
+            target = await resolve(target.module, target.name);
+            if (target) {
+                const hits = lookupBindings({ ...target, member: request.member }, moduleMap, index);
+                if (hits?.length || Object.hasOwn(moduleMap, target.module)) return hits ?? [];
+            }
+        }
+    }
+    return [];
+}
+
+module.exports = { bindingKey, findBindings, findReexportBindings, groupBindings, pythonQuery, pythonReexport };

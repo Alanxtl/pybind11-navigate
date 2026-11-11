@@ -1,9 +1,24 @@
 const { indexBindings } = require("./cpp");
 const { indexWithClangd } = require("./clangd");
-const { findBindings, groupBindings, pythonQuery } = require("./navigation");
+const { findBindings, findReexportBindings, groupBindings, pythonQuery, pythonReexport } = require("./navigation");
 const { typeDefinitionBindings } = require("./python_language_service");
 
 const namespace = "pybind11Navigation";
+const pythonModuleExclude = "{**/.git/**,**/.venv/**,**/build*/**,**/site-packages/**,**/node_modules/**}";
+const pythonIdentifier = /^[_\p{ID_Start}][\p{ID_Continue}]*$/u;
+
+async function readReexport(vscode, executable, module, name, token, signal) {
+    const parts = module.split(".");
+    if (!parts.every((part) => pythonIdentifier.test(part)) || token.isCancellationRequested) return;
+    const suffix = parts.join("/");
+    const files = await vscode.workspace.findFiles(
+        `{**/${suffix}.py,**/${suffix}/__init__.py}`, pythonModuleExclude, 2, token
+    );
+    if (files.length !== 1 || token.isCancellationRequested) return;
+    const document = await vscode.workspace.openTextDocument(files[0]);
+    if (token.isCancellationRequested) return;
+    return pythonReexport(executable, document.getText(), module, files[0].path.endsWith("/__init__.py"), name, signal);
+}
 
 class WorkspaceIndex {
     constructor(vscode, folder, log) {
@@ -120,7 +135,11 @@ function activate(context, vscode = require("vscode")) {
                         get: (key) => indexes.flatMap((folder) => folder.bindings.get(key) ?? []),
                     };
                     const moduleMap = settings.get("moduleMap", {});
-                    const fallback = findBindings(query.symbol, moduleMap, entries);
+                    let fallback = findBindings(query.symbol, moduleMap, entries);
+                    if (!fallback.length) {
+                        fallback = await findReexportBindings(query.symbol, moduleMap, entries,
+                            (module, name) => readReexport(vscode, executable, module, name, token, abort.signal));
+                    }
                     // Existing module-level symbols need no receiver type query.
                     const typed = fallback.some(({ kind }) => kind !== "method") ? undefined :
                         await typeDefinitionBindings(vscode, document, query, moduleMap, entries, token)

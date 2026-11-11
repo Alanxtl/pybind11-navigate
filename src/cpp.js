@@ -71,8 +71,7 @@ function indexBindings(source) {
     let lineStart = 0;
     let nextLine = source.indexOf("\n");
 
-    function add(module, className, name, kind, token) {
-        const { offset } = tokens[token];
+    function add(module, className, name, kind, offset) {
         while (nextLine !== -1 && nextLine < offset) {
             line++;
             lineStart = nextLine + 1;
@@ -90,7 +89,7 @@ function indexBindings(source) {
             if (end === undefined || end >= limit) break;
             const name = stringArgument(at(i + 3), at(i + 4));
             if (name && (method === "def" || method === "def_static")) {
-                add(module, className, name, className ? "method" : "function", i + 1);
+                add(module, className, name, className ? "method" : "function", tokens[i + 1].offset);
             }
             i = end + 1;
         }
@@ -118,7 +117,7 @@ function indexBindings(source) {
                 if (at(args) === "(" && end < limit && at(args + 1) === receiver && at(args + 2) === ",") {
                     const name = stringArgument(at(args + 3), at(args + 4));
                     if (name) {
-                        add(module, undefined, name, "class", i + 2);
+                        add(module, undefined, name, "class", tokens[args + 3].offset + 1);
                         i = chain(end + 1, limit, module, name);
                         continue;
                     }

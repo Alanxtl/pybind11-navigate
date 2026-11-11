@@ -64,11 +64,16 @@ Set the index globs and import mappings in your workspace settings as needed.
 }
 ```
 
-Without a mapping, the last segment of a Python module path is matched against
-the name in `PYBIND11_MODULE`. Mapping keys are full import paths. For example,
-the configuration above directs both `from acme.api import Widget` and
+The extension first checks the native module name. It can then trace
+re-exports through workspace Python modules and packages, including relative
+imports, aliases, and `__getattr__` forwarding to a literal
+`importlib.import_module` target. For a backend selected through
+`os.getenv` or `os.environ.get`, it follows the source-declared default.
+The extension reads the wrapper source without importing it. If it cannot
+identify a unique wrapper file or trace the export statically, set a module
+map. Explicit mappings take precedence and use full Python import paths.
+The configuration above directs both `from acme.api import Widget` and
 `import acme.internal.native as native` to registrations in `_core`.
-A wrapper's Python exports must retain the C++ registration's exported names.
 The include and exclude globs are relative to each workspace folder. Existing
 binding files are reindexed on save. Creation and deletion refresh the file
 list.
@@ -78,8 +83,8 @@ expressions with chained `.def(...)`, and module-level `m.def(...)` with literal
 export names. The Python AST fallback uses absolute imports, aliases, direct
 constructor calls and simple local or parameter annotations. Receivers whose
 type is unresolved produce no C++ result. This version requires syntactically
-valid Python and does not follow relative imports, C++ binding helpers,
-macro-generated bindings, dynamic Python exports, or C++ function bodies.
+valid Python. C++ binding helpers, macro-generated bindings, arbitrary
+dynamic Python exports, and C++ function bodies are outside its scope.
 
 ## Verify
 

@@ -4,7 +4,7 @@ const path = require("node:path");
 const test = require("node:test");
 const { indexBindings } = require("../src/cpp");
 const { activate } = require("../src/extension");
-const { findBindings, groupBindings, pythonQuery } = require("../src/navigation");
+const { findBindings, findReexportBindings, groupBindings, pythonQuery, pythonReexport } = require("../src/navigation");
 const clangdAst = require("./minimal-clangd-ast.json");
 
 const example = path.join(__dirname, "../examples/minimal");
@@ -45,9 +45,13 @@ test("C++ index records multiline registrations, lambda and pointer overloads", 
         ["_navigation_example", undefined, "Writer", "class"],
         ["_navigation_example", "Writer", "setup", "method"],
     ]);
-    for (const { kind, line, column } of entries) {
+    for (const { kind, name, line, column } of entries) {
         const target = cpp.split("\n")[line].slice(column);
-        assert.match(target, kind === "class" ? /^class_</ : /^def\(/);
+        if (kind === "class") {
+            assert.ok(target.startsWith(`${name}"`));
+        } else {
+            assert.match(target, /^def\(/);
+        }
     }
 });
 
@@ -59,7 +63,8 @@ test("C++ index ignores lookalikes in comments, raw strings, macros and lambda b
         /* PYBIND11_MODULE(fake, m) { m.def("fake", f); } */
         auto text = R"raw(PYBIND11_MODULE(fake, m) { m.def("fake", f); })raw";
         PYBIND11_MODULE(first, root, py::mod_gil_not_used()) {
-            py::class_<Type<std::pair<int, double>>>(root, "Thing")
+            py::class_<Type<std::pair<int, double>>>(root,
+                "Thing")
                 .def("method", [root] {
                     root.def("nested", other);
                     return 1'000;
@@ -72,13 +77,17 @@ test("C++ index ignores lookalikes in comments, raw strings, macros and lambda b
         PYBIND11_MODULE(second, root) {
             root.def("function", other);
         }`;
-    assert.deepEqual(indexBindings(source).map(({ module, name }) => [module, name]), [
+    const entries = indexBindings(source);
+    assert.deepEqual(entries.map(({ module, name }) => [module, name]), [
         ["first", "Thing"],
         ["first", "method"],
         ["first", "static_method"],
         ["first", "function"],
         ["second", "function"],
     ]);
+    const [{ line, column }] = entries;
+    assert.equal(line, registration(source, '"Thing"'));
+    assert.equal(source.split("\n")[line].slice(column), 'Thing")');
 });
 
 test("Python resolves module function, imported function alias and class alias", async () => {
@@ -148,6 +157,54 @@ test("Python leaves unknown or shadowed receivers unresolved", async () => {
     }
 });
 
+test("Static re-exports preserve aliases and follow the source-declared default", async () => {
+    const wrapper = `
+import importlib as loader
+from os import getenv
+
+mode = getenv("EXAMPLE_BACKEND", "native")
+if mode == "native":
+    try:
+        implementation = loader.import_module("pkg._navigation_example")
+    except ImportError as exc:
+        raise RuntimeError("missing native backend") from exc
+    exports = frozenset({"Reader"})
+else:
+    implementation = loader.import_module("pkg.alternative")
+    exports = {"Reader"}
+
+def __getattr__(name):
+    if name in exports:
+        return getattr(implementation, name)
+    raise AttributeError(name)
+`;
+    const sources = {
+        "pkg.public": ["from .wrapper import Reader as Input", false],
+        "pkg.wrapper": [wrapper, true],
+    };
+    const resolve = (module, name) => {
+        const file = sources[module];
+        return file && pythonReexport(python, file[0], module, file[1], name);
+    };
+    const code = "from pkg.public import Input\nreader = Input()\nreader.setup()";
+    const query = await pythonQuery(python, code, 3, "reader.".length);
+    const backends = groupBindings([
+        { uri: "bindings.cpp", entries: indexBindings(cpp) },
+        { uri: "other.cpp", entries: indexBindings(cpp.replace("_navigation_example", "alternative")) },
+    ]);
+    const hits = await findReexportBindings(query.symbol, {}, backends, resolve);
+    assert.deepEqual(hits.map(({ module, className }) => [module, className]), [
+        ["_navigation_example", "Reader"],
+        ["_navigation_example", "Reader"],
+    ]);
+    assert.deepEqual(await findReexportBindings(query.symbol, { "pkg.public": "other" }, index, resolve), []);
+    assert.equal(await resolve("pkg.wrapper", "Writer"), null);
+    assert.equal(await pythonReexport(python, "from ._native import Reader\nclass Reader: pass",
+        "pkg.wrapper", false, "Reader"), null);
+    assert.equal(await pythonReexport(python, "if condition:\n    from ._native import Reader",
+        "pkg.wrapper", false, "Reader"), null);
+});
+
 test("DefinitionProvider uses clangd and falls back on save when the AST cannot be used", async () => {
     const folder = { uri: "/workspace" };
     const cppUri = {
@@ -155,6 +212,7 @@ test("DefinitionProvider uses clangd and falls back on save when the AST cannot 
         toString: () => "file:///workspace/bindings.cpp",
     };
     const pythonUri = "/workspace/demo.py";
+    const wrapperUri = { path: "/workspace/src/sample/api/__init__.py" };
     const stubUri = {
         path: "/workspace/package/wrapper/__init__.pyi",
         toString: () => "file:///workspace/package/wrapper/__init__.pyi",
@@ -162,7 +220,10 @@ test("DefinitionProvider uses clangd and falls back on save when the AST cannot 
     const context = { subscriptions: [] };
     const disposable = { dispose() {} };
     const noopEvent = () => disposable;
-    const content = new Map([[cppUri, cpp]]);
+    const content = new Map([
+        [cppUri, cpp],
+        [wrapperUri, "from .._navigation_example import Reader as Input"],
+    ]);
     const messages = [];
     const readerPosition = { line: 0, character: 6 };
     const writerPosition = { line: 4, character: 6 };
@@ -245,8 +306,11 @@ test("DefinitionProvider uses clangd and falls back on save when the AST cannot 
                 ...disposable, onDidCreate: noopEvent, onDidDelete: noopEvent, onDidChange: noopEvent,
             }),
             findFiles: async (include) => {
+                if (typeof include === "string") {
+                    return include.includes("sample/api/") ? [wrapperUri] : [];
+                }
                 assert.equal(include.pattern, "**/*.cpp");
-                return [...content.keys()];
+                return [cppUri];
             },
             fs: { readFile: async (uri) => Buffer.from(content.get(uri)) },
             async openTextDocument(uri) {
@@ -295,6 +359,11 @@ test("DefinitionProvider uses clangd and falls back on save when the AST cannot 
         assert.equal(first.uri, cppUri);
         assert.equal(first.position.line, registration(cpp, 'module.def("twice"'));
         assert.deepEqual(messages, ["Indexed with clangd: /workspace/bindings.cpp"]);
+
+        const [aliased] = await definition("from sample.api import |Input");
+        assert.equal(aliased.uri, cppUri);
+        assert.equal(aliased.position.line, registration(cpp, 'class_<Reader>(module, "Reader")'));
+        assert.equal(cpp.split("\n")[aliased.position.line].slice(aliased.position.character), 'Reader")');
 
         // The AST-only Python lookup cannot infer the factory's return type.
         const factoryCall = mark(demo, "generated.setup()", "setup");
