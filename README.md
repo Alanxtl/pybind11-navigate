@@ -1,5 +1,8 @@
 # pybind11 Navigate
 
+github: https://github.com/Alanxtl/pybind11-navigate
+vscode marketplace: https://marketplace.visualstudio.com/items?itemName=XuetaoLi.pybind11-navigate
+
 Use **Go to Definition** in Python to open the C++ registration of a pybind11
 class, module function or method. The extension returns every registration of
 an overloaded name. VS Code may display Pylance stub locations alongside the
