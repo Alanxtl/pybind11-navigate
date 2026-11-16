@@ -8,6 +8,7 @@
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Programming Languages"],
   "main": "./src/extension.js",
+  "repository": "https://github.com/Alanxtl/pybind11-navigate",
   "activationEvents": ["onLanguage:python"],
   "capabilities": {
     "untrustedWorkspaces": { "supported": false },
