@@ -9,6 +9,14 @@ registration in C++. Press **F12** or **Ctrl+click** (**Cmd+click** on macOS)
 on the Python symbol. If a name has multiple registrations, all matching
 locations are returned.
 
+To navigate to the C++ callable, right-click the Python symbol and choose
+**pybind11 Navigate: Go to C++ Implementation**, or run that command from
+the Command Palette. Choose a registration when there are overloads. For a
+function pointer, the command uses your C++ language service (such as clangd
+or the Microsoft C/C++ extension); configure it for your C++ project. The
+available definition depends on that service's project configuration. A
+lambda opens directly at the lambda in the registration.
+
 ## Getting started
 
 1. Install [pybind11 Navigate](https://marketplace.visualstudio.com/items?itemName=XuetaoLi.pybind11-navigate) in VS Code.
@@ -22,7 +30,8 @@ It uses `python3` from PATH (`python` on Windows). If needed, set
 ## Automatic scanning
 
 When you open a Python file, the extension scans C++ files in each workspace
-folder for `PYBIND11_MODULE` and direct class or function registrations. It
+folder for `PYBIND11_MODULE`, classes, functions, properties, and named
+submodules, including registrations made through class variables. It
 updates indexed files when they are saved or changed, and refreshes the file
 list when matching C++ files are created or deleted.
 
@@ -33,17 +42,36 @@ By default, the scan includes `*.cc`, `*.cpp`, `*.cxx`, `*.h`, `*.hh`,
 relative glob patterns.
 
 The extension matches Python imports to native modules and can follow common
-re-exports in the workspace. Method navigation requires a known receiver type,
-such as one determined from a constructor call or type annotation.
+re-exports in the workspace. If a wrapper chooses a backend from an environment
+variable, automatic navigation uses the default declared in the source and
+shows a warning: the runtime may select a different backend. Use an explicit
+mapping below when necessary. Method navigation requires a known receiver
+type, such as one determined from a constructor call or type annotation.
 
 ## Working across projects
 
-Add the Python project and the project containing the C++ binding source to
-the **same VS Code workspace**. Choose **File → Add Folder to Workspace…**,
-then open the Python file and use F12 as usual. Save the workspace with
-**File → Save Workspace As…** to reopen both projects together later.
+You can add the project containing the C++ source to the same workspace using
+**File → Add Folder to Workspace…**. Alternatively, leave the Python project
+open on its own and associate an import with an external source directory in
+the Python project's `.vscode/settings.json`:
 
-The binding source must be in a workspace folder included by the scan.
+```json
+{
+  "pybind11Navigation.moduleSources": {
+    "acme.api": {
+      "module": "_core",
+      "path": "/path/to/cpp-project"
+    }
+  }
+}
+```
+
+Here `acme.api` is the Python import path and `_core` is the name in
+`PYBIND11_MODULE(_core, m)`. A relative `path` is resolved against the Python
+workspace folder; the directory must be accessible on the extension host. The
+same include and exclude settings apply to external sources. This association
+restricts the import to that directory, which keeps checkouts with identically
+named modules separate.
 
 ## Configure a module mapping
 
@@ -67,8 +95,8 @@ export under `PYBIND11_MODULE(_core, m)`, add:
 An explicit mapping takes precedence over automatic matching. The Python
 export name must match the name in the C++ registration.
 
-If navigation still fails, check that the binding file is in the workspace
-and is included by the scan. Open **View → Output → pybind11 Navigate** for
+If navigation still fails, check that the binding file is included by the
+scan or by a `moduleSources` directory. Open **View → Output → pybind11 Navigate** for
 indexing and Python parser messages.
 
 ## Credit

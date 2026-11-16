@@ -5,3 +5,4 @@ __pycache__/
 *.so
 *.pyd
 *.vsix
+node_modules/

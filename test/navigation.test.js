@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const { indexBindings } = require("../src/cpp");
-const { activate } = require("../src/extension");
+const { activate, mergeBindings } = require("../src/extension");
 const { findBindings, findReexportBindings, groupBindings, pythonQuery, pythonReexport } = require("../src/navigation");
 const clangdAst = require("./minimal-clangd-ast.json");
 
@@ -81,6 +81,7 @@ test("C++ index ignores lookalikes in comments, raw strings, macros and lambda b
     assert.deepEqual(entries.map(({ module, name }) => [module, name]), [
         ["first", "Thing"],
         ["first", "method"],
+        ["first", "property"],
         ["first", "static_method"],
         ["first", "function"],
         ["second", "function"],
@@ -88,6 +89,74 @@ test("C++ index ignores lookalikes in comments, raw strings, macros and lambda b
     const [{ line, column }] = entries;
     assert.equal(line, registration(source, '"Thing"'));
     assert.equal(source.split("\n")[line].slice(column), 'Thing")');
+});
+
+test("named class registrations keep methods with the correct class and module", () => {
+    const source = `
+namespace binding = pybind11;
+PYBIND11_MODULE(first, m) {
+    auto reader = binding::class_<Reader>(m, "Reader");
+    reader.def("setup", &Reader::setup)
+          .def("setup", [](Reader&) { return 1; });
+    binding::class_<Writer> writer(m, "Writer");
+    writer.def("setup", py::overload_cast<int>(&Writer::setup));
+    writer.def_property_readonly("size", &Writer::size);
+    reader = something_else;
+    reader.def("not_reader", &Other::wrong);
+    { auto reader = other(); reader.def("hidden", &Other::wrong); }
+}
+PYBIND11_MODULE(second, m) {
+    auto reader = binding::class_<Other>(m, "Reader");
+    reader.def("setup", &Other::setup);
+}`;
+    const entries = indexBindings(source);
+    assert.deepEqual(entries.map(({ module, className, name }) => [module, className, name]), [
+        ["first", undefined, "Reader"], ["first", "Reader", "setup"], ["first", "Reader", "setup"],
+        ["first", undefined, "Writer"], ["first", "Writer", "setup"], ["first", "Writer", "size"],
+        ["second", undefined, "Reader"], ["second", "Reader", "setup"],
+    ]);
+    const targets = entries.filter((entry) => entry.implementation).map(({ implementation: target }) => {
+        const remainder = source.split("\n")[target.line].slice(target.column);
+        return [target.kind, remainder.slice(0, target.kind === "lambda" ? 1 : "setup".length)];
+    });
+    assert.deepEqual(targets, [["pointer", "setup"], ["lambda", "["], ["pointer", "setup"],
+        ["pointer", "size)"], ["pointer", "setup"]]);
+});
+
+test("submodules and properties retain their owner", async () => {
+    const source = `
+PYBIND11_MODULE(_core, m) {
+    auto alpha = m.def_submodule("alpha");
+    auto beta = m.def_submodule("beta");
+    auto a = py::class_<A>(alpha, "Thing");
+    a.def_property("value", &A::get, &A::set);
+    py::class_<B>(beta, "Thing").def_property_readonly("value", &B::get);
+    alpha.def("work", &alpha_work);
+    beta.def("work", &beta_work);
+}`;
+    const entries = indexBindings(source);
+    const index = groupBindings([{ uri: "submodules.cpp", entries }]);
+    const alpha = await navigate("from pkg._core.alpha import Thing\nthing: Thing\nthing.|value", {}, index);
+    const beta = await navigate("from pkg.public.beta import Thing\nthing = Thing()\nthing.|value", { "pkg.public": "_core" }, index);
+    assert.deepEqual(alpha.map(({ module, className, name }) => [module, className, name]), [["_core.alpha", "Thing", "value"]]);
+    assert.deepEqual(beta.map(({ module, className, name }) => [module, className, name]), [["_core.beta", "Thing", "value"]]);
+    assert.deepEqual(alpha[0].implementations.map(({ role }) => role), ["getter", "setter"]);
+    const work = await navigate("import pkg._core.beta as b\nb.|work()", {}, index);
+    assert.deepEqual(work.map(({ module }) => module), ["_core.beta"]);
+});
+
+test("clangd registrations gain callable locations and named-class registrations", () => {
+    const source = `PYBIND11_MODULE(_core, m) {
+    m.def("work", &work);
+    auto a = py::class_<A>(m, "A");
+    a.def("setup", &A::setup);
+}`;
+    const lexical = indexBindings(source);
+    const clangd = [{ module: "_core", className: undefined, name: "work", kind: "function", line: 1, column: 6 }];
+    const merged = mergeBindings(clangd, lexical);
+    assert.deepEqual(merged.map(({ name }) => name), ["work", "A", "setup"]);
+    assert.equal(merged[0].implementation.kind, "pointer");
+    assert.equal(merged[2].className, "A");
 });
 
 test("Python resolves module function, imported function alias and class alias", async () => {
@@ -157,6 +226,13 @@ test("Python leaves unknown or shadowed receivers unresolved", async () => {
     }
 });
 
+test("an unfinished later statement preserves earlier navigation without guessing shadowed names", async () => {
+    const prefix = "from _navigation_example import Reader\ndef use():\n    reader = Reader()\n    reader.|setup()\n";
+    assert.equal((await navigate(prefix + "def unfinished(" )).length, 2);
+    assert.deepEqual(await navigate(prefix + "def unfinished(\n    reader = other()"), []);
+    assert.deepEqual(await navigate("from _navigation_example import Reader\nunfinished(\nReader().|setup()"), []);
+});
+
 test("Static re-exports preserve aliases and follow the source-declared default", async () => {
     const wrapper = `
 import importlib as loader
@@ -186,6 +262,7 @@ def __getattr__(name):
         const file = sources[module];
         return file && pythonReexport(python, file[0], module, file[1], name);
     };
+    assert.equal((await resolve("pkg.wrapper", "Reader")).assumedDefault, true);
     const code = "from pkg.public import Input\nreader = Input()\nreader.setup()";
     const query = await pythonQuery(python, code, 3, "reader.".length);
     const backends = groupBindings([
@@ -277,6 +354,7 @@ test("DefinitionProvider uses clangd and falls back on save when the AST cannot 
             },
         },
         commands: {
+            registerCommand: () => disposable,
             async executeCommand(command, uri, position) {
                 if (command === "vscode.executeTypeDefinitionProvider") {
                     assert.equal(uri, pythonUri);

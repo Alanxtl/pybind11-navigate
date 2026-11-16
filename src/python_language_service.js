@@ -6,8 +6,8 @@ function moduleFromPath(path, moduleMap) {
     const mapped = Object.keys(moduleMap)
         .filter((name) => modulePath.endsWith("/" + name.replaceAll(".", "/")))
         .sort((a, b) => b.length - a.length);
-    if (mapped.length) return moduleMap[mapped[0]];
-    if (path.endsWith(".pyi")) return modulePath.split("/").at(-1);
+    if (mapped.length) return { native: moduleMap[mapped[0]], python: mapped[0] };
+    if (path.endsWith(".pyi")) return { native: modulePath.split("/").at(-1) };
     return undefined;
 }
 
@@ -48,10 +48,10 @@ async function typeDefinitionBindings(vscode, document, query, moduleMap, index,
         }
         return startsAt(symbol.location?.range, range.start);
     });
-    if (!declaration || !index.get(bindingKey(module, undefined, declaration.name, "class"))?.length) {
+    if (!declaration || !index.get(bindingKey(module.native, undefined, declaration.name, "class"), module.python)?.length) {
         return undefined;
     }
-    return index.get(bindingKey(module, declaration.name, query.member, "method")) ?? [];
+    return index.get(bindingKey(module.native, declaration.name, query.member, "method"), module.python) ?? [];
 }
 
 module.exports = { typeDefinitionBindings };

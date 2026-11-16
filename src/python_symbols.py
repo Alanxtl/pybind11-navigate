@@ -2,6 +2,7 @@
 
 import ast
 import json
+import re
 import sys
 from dataclasses import dataclass, replace
 
@@ -259,10 +260,23 @@ def symbol_data(symbol):
 
 
 def query(source, line, column):
+    uncertain_names = set()
     try:
         tree = ast.parse(source)
-    except SyntaxError:
-        return None
+    except SyntaxError as error:
+        # An unfinished statement after the cursor should not disable
+        # navigation in the already complete prefix. Never repair the selected
+        # statement or a preceding error, where its meaning is uncertain.
+        if not error.lineno or error.lineno <= line:
+            return None
+        try:
+            tree = ast.parse("".join(source.splitlines(keepends=True)[: error.lineno - 1]))
+        except SyntaxError:
+            return None
+        # An unparsed suffix can still rebind a local name and change the
+        # meaning of an earlier reference. Treat mentioned names as unknown.
+        suffix = "".join(source.splitlines(keepends=True)[error.lineno - 1 :])
+        uncertain_names.update(re.findall(r"\b[^\W\d]\w*\b", suffix))
     parents = {
         child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)
     }
@@ -278,7 +292,10 @@ def query(source, line, column):
         path = [node]
         while path[-1] in parents:
             path.append(parents[path[-1]])
-        symbol = reference(node, visible_bindings(list(reversed(path))))
+        bindings = visible_bindings(list(reversed(path)))
+        for name in uncertain_names:
+            bindings.pop(name, None)
+        symbol = reference(node, bindings)
         result = {"symbol": symbol_data(symbol)}
         if isinstance(node, ast.Attribute) and isinstance(
             node.value, (ast.Name, ast.Attribute)

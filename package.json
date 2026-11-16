@@ -1,23 +1,47 @@
 {
   "name": "pybind11-navigate",
   "displayName": "pybind11 Navigate",
-  "description": "Go from Python symbols to pybind11 registrations in the workspace.",
+  "description": "Navigate from Python symbols to pybind11 bindings and C++ implementations.",
   "publisher": "XuetaoLi",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "private": true,
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Programming Languages"],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
   "main": "./src/extension.js",
   "repository": "https://github.com/Alanxtl/pybind11-navigate",
-  "activationEvents": ["onLanguage:python"],
+  "activationEvents": [
+    "onLanguage:python"
+  ],
   "capabilities": {
-    "untrustedWorkspaces": { "supported": false },
+    "untrustedWorkspaces": {
+      "supported": false
+    },
     "virtualWorkspaces": false
   },
   "scripts": {
-    "test": "node test/navigation.test.js"
+    "test": "node test/navigation.test.js && node test/extension-v2.test.js"
   },
   "contributes": {
+    "commands": [
+      {
+        "command": "pybind11Navigation.goToImplementation",
+        "title": "Go to C++ Implementation",
+        "category": "pybind11 Navigate"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "pybind11Navigation.goToImplementation",
+          "when": "editorLangId == python",
+          "group": "navigation"
+        }
+      ]
+    },
     "configuration": {
       "title": "pybind11 Navigate",
       "properties": {
@@ -36,9 +60,26 @@
         "pybind11Navigation.moduleMap": {
           "type": "object",
           "default": {},
-          "additionalProperties": { "type": "string" },
+          "additionalProperties": {
+            "type": "string"
+          },
           "scope": "resource",
           "description": "Map full Python import paths to names used in PYBIND11_MODULE."
+        },
+        "pybind11Navigation.moduleSources": {
+          "type": "object",
+          "default": {},
+          "scope": "resource",
+          "description": "Associate a Python import path with a native module and a source directory, including directories outside the workspace. Relative paths are resolved against the Python workspace folder.",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["module", "path"],
+            "additionalProperties": false,
+            "properties": {
+              "module": { "type": "string", "description": "Name used in PYBIND11_MODULE." },
+              "path": { "type": "string", "description": "C++ source directory on the extension host." }
+            }
+          }
         },
         "pybind11Navigation.useClangd": {
           "type": "boolean",
@@ -54,5 +95,8 @@
         }
       }
     }
+  },
+  "dependencies": {
+    "picomatch": "4.0.7"
   }
 }

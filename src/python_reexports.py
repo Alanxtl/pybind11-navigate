@@ -6,6 +6,8 @@ import sys
 from dataclasses import dataclass
 from importlib.util import resolve_name
 
+SOURCE_DEFAULT = object()
+
 
 @dataclass(frozen=True)
 class Import:
@@ -80,6 +82,7 @@ def call_value(node, scope):
         ):
             # Use the source-declared default. The debuggee may have a
             # different environment from the editor and this subprocess.
+            scope[SOURCE_DEFAULT] = True
             return args[1]
     if isinstance(node.func, ast.Name) and node.func.id not in scope:
         if (
@@ -182,7 +185,10 @@ def reexport(source, module, is_package, name):
                 scope[params[0].arg] = name
                 target = trace(getter.body, scope, package, getter=True)
     if isinstance(target, Import) and len(target.path) >= 2:
-        return {"module": ".".join(target.path[:-1]), "name": target.path[-1]}
+        result = {"module": ".".join(target.path[:-1]), "name": target.path[-1]}
+        if scope.get(SOURCE_DEFAULT):
+            result["assumedDefault"] = True
+        return result
     return None
 
 

@@ -78,12 +78,24 @@ function bindingRequests(symbol, moduleMap) {
 
 function lookupBindings(request, moduleMap, index) {
     const { module, name, member } = request;
-    const native = Object.hasOwn(moduleMap, module) ? moduleMap[module] : module.split(".").at(-1);
-    const classes = index.get(bindingKey(native, undefined, name, "class")) ?? [];
-    if (member) {
-        if (classes.length) return index.get(bindingKey(native, name, member, "method")) ?? [];
-    } else {
-        return [...classes, ...(index.get(bindingKey(native, undefined, name, "function")) ?? [])];
+    const parts = module.split(".");
+    let candidates;
+    for (let size = parts.length; size > 0; size--) {
+        const prefix = parts.slice(0, size).join(".");
+        if (Object.hasOwn(moduleMap, prefix)) {
+            candidates = [[moduleMap[prefix], ...parts.slice(size)].join(".")];
+            break;
+        }
+    }
+    candidates ??= parts.map((_, start) => parts.slice(start).join("."));
+    for (const native of candidates) {
+        const classes = index.get(bindingKey(native, undefined, name, "class"), module) ?? [];
+        if (member) {
+            if (classes.length) return index.get(bindingKey(native, name, member, "method"), module) ?? [];
+        } else {
+            const hits = [...classes, ...(index.get(bindingKey(native, undefined, name, "function"), module) ?? [])];
+            if (hits.length) return hits;
+        }
     }
     return undefined;
 }
